@@ -4,7 +4,7 @@ plugins {
 
 allprojects {
     group = "app.odango"
-    version = "1.0.1"
+    version = "1.0.2"
 }
 
 subprojects {
