@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]'))
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          set -euo pipefail
+          current="$(sed -n 's/^[[:space:]]*version = "\(.*\)".*/\1/p' build.gradle.kts | head -n 1)"
+          if ! [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must be semantic x.y.z, got: $current" >&2
+            exit 1
+          fi
+
+          IFS=. read -r major minor patch <<< "$current"
+          next="${major}.${minor}.$((patch + 1))"
+          perl -0pi -e "s/version = \"\\Q$current\\E\"/version = \"$next\"/" build.gradle.kts
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build.gradle.kts
+          git commit -m "chore: release v${next} [skip ci]"
+          git push
+
+          {
+            echo "version=${next}"
+            echo "tag=v${next}"
+            echo "sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" clean build
+
+      - name: Prepare release files
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          cp velocity/build/libs/discord-integration-velocity-${{ steps.bump.outputs.version }}.jar release-artifacts/
+          cp fabric-backend/build/libs/discord-integration-fabric-backend-${{ steps.bump.outputs.version }}.jar release-artifacts/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.bump.outputs.tag }}" \
+            release-artifacts/*.jar \
+            --target "${{ steps.bump.outputs.sha }}" \
+            --title "Discord Integration Velocity ${{ steps.bump.outputs.version }}" \
+            --notes "Automated release from main at ${{ steps.bump.outputs.sha }}."

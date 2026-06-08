@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "discordintegrationfabricbackend",
+  "version": "${version}",
+  "name": "Discord Integration Fabric Backend",
+  "description": "Sends Fabric backend death events to the Discord Integration Velocity plugin.",
+  "authors": ["odango"],
+  "environment": "server",
+  "entrypoints": {
+    "server": [
+      "app.odango.discordvelocity.fabric.DiscordIntegrationFabricBackend"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "26.1.2",
+    "fabric-api": ">=0.151.0+26.1.2"
+  }
+}
