@@ -37,6 +37,7 @@ public final class DiscordIntegrationFabricBackend implements DedicatedServerMod
         BlockPos position = player.blockPosition();
         String json = deathJson(
                 player.getGameProfile().name(),
+                player.getGameProfile().id().toString(),
                 damageSource.getLocalizedDeathMessage(player).getString(),
                 player.level().dimension().identifier().toString(),
                 position.getX(),
@@ -47,9 +48,10 @@ public final class DiscordIntegrationFabricBackend implements DedicatedServerMod
         ServerPlayNetworking.send(player, new BackendEventPayload(json));
     }
 
-    private static String deathJson(String player, String deathMessage, String world, int x, int y, int z) {
+    private static String deathJson(String player, String uuid, String deathMessage, String world, int x, int y, int z) {
         return "{\"type\":\"death\""
                 + ",\"player\":\"" + escapeJson(player) + "\""
+                + ",\"uuid\":\"" + escapeJson(uuid) + "\""
                 + ",\"deathMessage\":\"" + escapeJson(deathMessage) + "\""
                 + ",\"world\":\"" + escapeJson(world) + "\""
                 + ",\"x\":" + x

@@ -8,6 +8,7 @@ final class BackendEvent {
 
     String type;
     String player;
+    String uuid;
     String deathMessage;
     String world;
     int x;

@@ -18,11 +18,13 @@ import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.Optional;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Activity;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
@@ -106,14 +108,16 @@ public final class DiscordIntegrationVelocityPlugin {
     @Subscribe
     public void onPostLogin(PostLoginEvent event) {
         if (config.embeds.joinLeave) {
-            sendEmbed("Player joined", event.getPlayer().getUsername() + " joined the network.", config.embeds.joinColor);
+            Player player = event.getPlayer();
+            sendAuthorEmbed(player.getUsername() + "さんが参加しました", playerAvatarUrl(player), null, config.embeds.joinColor);
         }
     }
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
         if (config.embeds.joinLeave) {
-            sendEmbed("Player left", event.getPlayer().getUsername() + " left the network.", config.embeds.leaveColor);
+            Player player = event.getPlayer();
+            sendAuthorEmbed(player.getUsername() + "さんが退出しました", playerAvatarUrl(player), null, config.embeds.leaveColor);
         }
     }
 
@@ -127,9 +131,11 @@ public final class DiscordIntegrationVelocityPlugin {
         event.getPreviousServer().ifPresent(previousServer -> {
             String previousName = previousServer.getServerInfo().getName();
             if (!previousName.equals(currentServer)) {
-                sendEmbed(
-                        "Server switch",
-                        event.getPlayer().getUsername() + " moved from `" + previousName + "` to `" + currentServer + "`.",
+                Player player = event.getPlayer();
+                sendAuthorEmbed(
+                        player.getUsername() + "さんがサーバーを移動しました",
+                        playerAvatarUrl(player),
+                        "`" + previousName + "` から `" + currentServer + "` に移動しました",
                         config.embeds.switchColor
                 );
             }
@@ -152,12 +158,17 @@ public final class DiscordIntegrationVelocityPlugin {
         }
 
         String serverName = source.getServerInfo().getName();
-        String description = backendEvent.player + " died on `" + serverName + "`";
+        String description = "`" + serverName + "` で死亡しました";
         if (backendEvent.deathMessage != null && !backendEvent.deathMessage.isBlank()) {
             description += "\n" + backendEvent.deathMessage;
         }
-        description += "\nWorld: `" + backendEvent.world + "`  X: `" + backendEvent.x + "`  Y: `" + backendEvent.y + "`  Z: `" + backendEvent.z + "`";
-        sendEmbed("Player death", description, config.embeds.deathColor);
+        description += "\nワールド: `" + backendEvent.world + "`  X: `" + backendEvent.x + "`  Y: `" + backendEvent.y + "`  Z: `" + backendEvent.z + "`";
+        sendAuthorEmbed(
+                backendEvent.player + "さんが死亡しました",
+                playerAvatarUrl(backendEvent.uuid, backendEvent.player),
+                description,
+                config.embeds.deathColor
+        );
     }
 
     private void startDiscord() {
@@ -193,20 +204,26 @@ public final class DiscordIntegrationVelocityPlugin {
         if (channel == null) {
             return;
         }
-        channel.sendMessage(message).queue(null, error -> logger.warn("Failed to send Discord message.", error));
+        channel.sendMessage(message)
+                .setAllowedMentions(EnumSet.noneOf(Message.MentionType.class))
+                .queue(null, error -> logger.warn("Failed to send Discord message.", error));
     }
 
-    private void sendEmbed(String title, String description, int color) {
+    private void sendAuthorEmbed(String author, String iconUrl, String description, int color) {
         TextChannel channel = discordChannel;
         if (channel == null) {
             return;
         }
         EmbedBuilder embed = new EmbedBuilder()
-                .setTitle(title)
-                .setDescription(description)
+                .setAuthor(author, null, iconUrl)
                 .setColor(color)
                 .setTimestamp(Instant.now());
-        channel.sendMessageEmbeds(embed.build()).queue(null, error -> logger.warn("Failed to send Discord embed.", error));
+        if (description != null && !description.isBlank()) {
+            embed.setDescription(description);
+        }
+        channel.sendMessageEmbeds(embed.build())
+                .setAllowedMentions(EnumSet.noneOf(Message.MentionType.class))
+                .queue(null, error -> logger.warn("Failed to send Discord embed.", error));
     }
 
     private void broadcastDiscordMessage(String author, String content) {
@@ -227,6 +244,15 @@ public final class DiscordIntegrationVelocityPlugin {
 
     private Optional<String> currentServerName(Player player) {
         return player.getCurrentServer().map(connection -> connection.getServerInfo().getName());
+    }
+
+    private static String playerAvatarUrl(Player player) {
+        return playerAvatarUrl(player.getUniqueId().toString(), player.getUsername());
+    }
+
+    private static String playerAvatarUrl(String uuid, String fallbackName) {
+        String avatarId = uuid == null || uuid.isBlank() ? fallbackName : uuid;
+        return "https://mc-heads.net/avatar/" + avatarId;
     }
 
     private static String escapeMarkdown(String input) {
