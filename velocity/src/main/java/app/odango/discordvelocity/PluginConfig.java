@@ -32,11 +32,30 @@ public final class PluginConfig {
             }
             try (Reader reader = Files.newBufferedReader(configPath)) {
                 PluginConfig config = GSON.fromJson(reader, PluginConfig.class);
-                return config == null ? new PluginConfig() : config;
+                if (config == null) {
+                    return new PluginConfig();
+                }
+                config.normalize();
+                return config;
             }
         } catch (IOException exception) {
             logger.error("Failed to load config.json. Using defaults.", exception);
             return new PluginConfig();
+        }
+    }
+
+    private void normalize() {
+        if (discord == null) {
+            discord = new Discord();
+        }
+        if (minecraft == null) {
+            minecraft = new Minecraft();
+        }
+        if (minecraft.syncedServers == null || minecraft.syncedServers.isEmpty()) {
+            minecraft.syncedServers = new ArrayList<>(List.of("*"));
+        }
+        if (embeds == null) {
+            embeds = new Embeds();
         }
     }
 
@@ -45,6 +64,9 @@ public final class PluginConfig {
         public String token = "";
         public String channelId = "";
         public String status = "Minecraft chat";
+        public boolean slashCommands = true;
+        public boolean minecraftChatWebhook = true;
+        public String minecraftChatWebhookName = "Minecraft Chat";
     }
 
     public static final class Minecraft {
@@ -61,9 +83,15 @@ public final class PluginConfig {
         public boolean joinLeave = true;
         public boolean serverSwitch = true;
         public boolean death = true;
+        public boolean proxyStatus = true;
         public int joinColor = 0x43B581;
         public int leaveColor = 0xF04747;
         public int switchColor = 0xFAA61A;
         public int deathColor = 0x992D22;
+        public int overworldDeathColor = 0x992D22;
+        public int netherDeathColor = 0xB03A2E;
+        public int endDeathColor = 0x71368A;
+        public int proxyStartColor = 0x43B581;
+        public int proxyStopColor = 0xF04747;
     }
 }
