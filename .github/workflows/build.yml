@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      minecraft: ${{ steps.matrix.outputs.minecraft }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - id: matrix
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          versions = [line.split("=", 1)[0] for line in Path("fabric-backend/versions.properties").read_text().splitlines() if line and not line.startswith("#")]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("minecraft=" + json.dumps(versions) + "\n")
+          PY
+
+  fabric:
+    name: Fabric ${{ matrix.minecraft }}
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        minecraft: ${{ fromJSON(needs.versions.outputs.minecraft) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and check backend
+        env:
+          MINECRAFT_VERSION: ${{ matrix.minecraft }}
+        run: ./gradlew :fabric-backend:build -PminecraftVersion="$MINECRAFT_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-fabric-${{ matrix.minecraft }}
+          path: fabric-backend/build/${{ matrix.minecraft }}/libs/*-mc${{ matrix.minecraft }}.jar
+          if-no-files-found: error
+
+  velocity:
+    name: Velocity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :velocity:build --configure-on-demand
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-velocity
+          path: velocity/build/libs/discord-integration-velocity-*.jar
+          if-no-files-found: error

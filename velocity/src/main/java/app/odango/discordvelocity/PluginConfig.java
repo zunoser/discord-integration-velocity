@@ -2,6 +2,8 @@ package app.odango.discordvelocity;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
@@ -17,6 +19,8 @@ public final class PluginConfig {
     public Discord discord = new Discord();
     public Minecraft minecraft = new Minecraft();
     public Embeds embeds = new Embeds();
+    public Authentication authentication = new Authentication();
+    transient boolean loadFailed;
 
     static PluginConfig load(Path dataDirectory, Logger logger) {
         Path configPath = dataDirectory.resolve("config.json");
@@ -31,13 +35,34 @@ public final class PluginConfig {
                 return defaults;
             }
             try (Reader reader = Files.newBufferedReader(configPath)) {
-                PluginConfig config = GSON.fromJson(reader, PluginConfig.class);
-                return config == null ? new PluginConfig() : config;
+                var json = JsonParser.parseReader(reader);
+                if (json.isJsonObject() && json.getAsJsonObject().has("authentication")) {
+                    var auth = json.getAsJsonObject().get("authentication");
+                    if (!auth.isJsonObject() || (auth.getAsJsonObject().has("enabled")
+                            && (!auth.getAsJsonObject().get("enabled").isJsonPrimitive()
+                            || !auth.getAsJsonObject().get("enabled").getAsJsonPrimitive().isBoolean()))) {
+                        throw new JsonParseException("authentication.enabled must be a boolean.");
+                    }
+                }
+                PluginConfig config = GSON.fromJson(json, PluginConfig.class);
+                if (config == null || config.discord == null || config.minecraft == null
+                        || config.embeds == null || config.authentication == null
+                        || config.discord.token == null || config.discord.channelId == null
+                        || config.discord.status == null || config.minecraft.syncedServers == null) {
+                    throw new JsonParseException("Required config objects/values must not be null.");
+                }
+                return config;
             }
-        } catch (IOException exception) {
-            logger.error("Failed to load config.json. Using defaults.", exception);
-            return new PluginConfig();
+        } catch (IOException | JsonParseException exception) {
+            logger.error("Failed to load config.json. Player logins will be denied until fixed and restarted.", exception);
+            PluginConfig failed = new PluginConfig();
+            failed.loadFailed = true;
+            return failed;
         }
+    }
+
+    public static final class Authentication {
+        public boolean enabled = false;
     }
 
     public static final class Discord {

@@ -1,8 +1,11 @@
 package app.odango.discordvelocity;
 
 import com.google.inject.Inject;
+import com.velocitypowered.api.event.PostOrder;
+import com.velocitypowered.api.event.ResultedEvent.ComponentResult;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
+import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.PlayerChatEvent;
@@ -15,6 +18,7 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -23,11 +27,15 @@ import java.util.Optional;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Activity;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.OptionType;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -48,8 +56,9 @@ public final class DiscordIntegrationVelocityPlugin {
     private final Logger logger;
     private final Path dataDirectory;
     private PluginConfig config;
-    private JDA jda;
-    private TextChannel discordChannel;
+    private volatile JDA jda;
+    private volatile TextChannel discordChannel;
+    private DiscordWhitelist whitelist;
 
     @Inject
     public DiscordIntegrationVelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -61,8 +70,58 @@ public final class DiscordIntegrationVelocityPlugin {
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
         this.config = PluginConfig.load(dataDirectory, logger);
+        if (config.loadFailed) {
+            return;
+        }
+        if (config.authentication.enabled) {
+            try {
+                whitelist = new DiscordWhitelist(dataDirectory.resolve("discord-whitelist.json"));
+            } catch (IOException exception) {
+                logger.error("Failed to load Discord whitelist. All player logins will be denied.", exception);
+            }
+        }
         proxy.getChannelRegistrar().register(EVENT_CHANNEL);
         startDiscord();
+    }
+
+    @Subscribe(order = PostOrder.LAST)
+    public void onLogin(LoginEvent event) {
+        if (!event.getResult().isAllowed()) {
+            return;
+        }
+        String denial = loginDenial(event.getPlayer());
+        if (denial != null) {
+            event.setResult(ComponentResult.denied(Component.text(denial, NamedTextColor.RED)));
+        }
+    }
+
+    private String loginDenial(Player player) {
+        if (config == null || config.loadFailed) {
+            return "設定を読み込めないため接続できません。管理者に連絡してください。";
+        }
+        if (!config.authentication.enabled) {
+            return null;
+        }
+        if (whitelist == null) {
+            return "認証リストを読み込めません。管理者に連絡してください。";
+        }
+        if (!player.isOnlineMode()) {
+            return "Discord認証にはMinecraftのオンライン認証が必要です。管理者に連絡してください。";
+        }
+        if (whitelist.contains(player.getUniqueId())) {
+            return null;
+        }
+        TextChannel channel = discordChannel;
+        if (jda == null || jda.getStatus() != JDA.Status.CONNECTED || channel == null) {
+            return "Discord認証は現在利用できません。しばらくしてから再接続してください。";
+        }
+        try {
+            String code = whitelist.issueCode(player.getUniqueId(), player.getUsername());
+            return "Discord認証が必要です。\n「" + channel.getGuild().getName() + "」で\n/認証 code:"
+                    + code + "\nを実行し、再接続してください。\nコードの有効期限は10分です。他人には渡さないでください。";
+        } catch (IllegalStateException exception) {
+            return exception.getMessage();
+        }
     }
 
     @Subscribe
@@ -107,6 +166,11 @@ public final class DiscordIntegrationVelocityPlugin {
 
     @Subscribe
     public void onPostLogin(PostLoginEvent event) {
+        String denial = loginDenial(event.getPlayer());
+        if (denial != null) {
+            event.getPlayer().disconnect(Component.text(denial, NamedTextColor.RED));
+            return;
+        }
         if (config.embeds.joinLeave) {
             Player player = event.getPlayer();
             sendAuthorEmbed(player.getUsername() + "さんが参加しました", playerAvatarUrl(player), null, config.embeds.joinColor);
@@ -115,7 +179,8 @@ public final class DiscordIntegrationVelocityPlugin {
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
-        if (config.embeds.joinLeave) {
+        if (config != null && event.getLoginStatus() == DisconnectEvent.LoginStatus.SUCCESSFUL_LOGIN
+                && config.embeds.joinLeave) {
             Player player = event.getPlayer();
             sendAuthorEmbed(player.getUsername() + "さんが退出しました", playerAvatarUrl(player), null, config.embeds.leaveColor);
         }
@@ -193,10 +258,24 @@ public final class DiscordIntegrationVelocityPlugin {
                 logger.warn("Discord channel {} was not found or is not a text channel.", config.discord.channelId);
             } else {
                 logger.info("Discord integration connected to #{}.", discordChannel.getName());
+                if (config.authentication.enabled && whitelist != null) {
+                    registerAuthenticationCommands();
+                }
             }
         } catch (Exception exception) {
             logger.error("Failed to start Discord integration.", exception);
         }
+    }
+
+    private void registerAuthenticationCommands() {
+        var guild = discordChannel.getGuild();
+        guild.upsertCommand(Commands.slash("認証", "Minecraftの接続画面に表示されたコードで参加を許可します")
+                .addOption(OptionType.STRING, "code", "Minecraft接続時の16桁のコード（有効期限10分）", true))
+                .queue(command -> logger.info("Registered /認証 in Discord guild {}.", guild.getId()),
+                        error -> logger.error("Failed to register /認証.", error));
+        guild.upsertCommand(Commands.slash("認証解除", "Minecraftの登録を解除します。他の人の解除にはサーバー管理権限が必要です")
+                .addOption(OptionType.USER, "user", "解除するDiscordユーザー（省略時は自分）", false))
+                .queue(null, error -> logger.error("Failed to register /認証解除.", error));
     }
 
     private void sendDiscordMessage(String message) {
@@ -264,6 +343,50 @@ public final class DiscordIntegrationVelocityPlugin {
     }
 
     private final class DiscordListener extends ListenerAdapter {
+        @Override
+        public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) {
+            if (!event.getName().equals("認証") && !event.getName().equals("認証解除")) {
+                return;
+            }
+            TextChannel channel = discordChannel;
+            if (!config.authentication.enabled || whitelist == null || channel == null || !event.isFromGuild()
+                    || event.getGuild() == null || event.getMember() == null
+                    || event.getGuild().getIdLong() != channel.getGuild().getIdLong()) {
+                event.reply("このサーバーでは認証を利用できません。").setEphemeral(true).queue();
+                return;
+            }
+            String userId = event.getUser().getId();
+            var target = event.getOption("user");
+            String targetId = target == null ? userId : target.getAsUser().getId();
+            if (event.getName().equals("認証解除") && !targetId.equals(userId)
+                    && !event.getMember().hasPermission(Permission.MANAGE_SERVER)) {
+                event.reply("他の人の登録解除には「サーバー管理」権限が必要です。").setEphemeral(true).queue();
+                return;
+            }
+            event.deferReply(true).queue(hook -> {
+                try {
+                    if (event.getName().equals("認証")) {
+                        var code = event.getOption("code");
+                        if (code == null) {
+                            throw new IllegalArgumentException("Minecraftの接続画面に表示されたコードを指定してください。");
+                        }
+                        var uuid = whitelist.link(code.getAsString().trim(), userId);
+                        hook.editOriginal("認証しました。Minecraftから再接続してください。UUID: " + uuid).queue();
+                    } else {
+                        var uuid = whitelist.unlink(targetId);
+                        proxy.getPlayer(uuid).ifPresent(player -> player.disconnect(
+                                Component.text("Discord認証が解除されました。", NamedTextColor.RED)));
+                        hook.editOriginal("登録を解除しました。").queue();
+                    }
+                } catch (IllegalArgumentException exception) {
+                    hook.editOriginal(exception.getMessage()).queue();
+                } catch (IOException exception) {
+                    logger.error("Failed to save Discord whitelist. No change was applied.", exception);
+                    hook.editOriginal("保存に失敗しました。登録は変更されていません。管理者に連絡してください。").queue();
+                }
+            }, error -> logger.warn("Failed to acknowledge authentication command.", error));
+        }
+
         @Override
         public void onMessageReceived(@NotNull MessageReceivedEvent event) {
             if (!config.minecraft.broadcastDiscordMessages) {
