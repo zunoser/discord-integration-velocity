@@ -14,12 +14,16 @@ permissions:
 
 jobs:
   versions:
+    timeout-minutes: 360
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       minecraft: ${{ steps.matrix.outputs.minecraft }}
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
       - id: matrix
         run: |
@@ -32,6 +36,9 @@ jobs:
           PY
 
   fabric:
+    timeout-minutes: 360
+    permissions:
+      contents: read
     name: Fabric ${{ matrix.minecraft }}
     needs: versions
     runs-on: ubuntu-latest
@@ -42,6 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-java@v4
         with:
@@ -59,11 +67,15 @@ jobs:
           if-no-files-found: error
 
   velocity:
+    timeout-minutes: 360
+    permissions:
+      contents: read
     name: Velocity
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-java@v4
         with:
