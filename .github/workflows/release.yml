@@ -6,8 +6,7 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-main
@@ -15,6 +14,9 @@ concurrency:
 
 jobs:
   prepare:
+    timeout-minutes: 360
+    permissions:
+      contents: write
     name: Prepare release
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]'))
@@ -28,11 +30,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
           ref: ${{ github.ref_name }}
 
       - name: Bump patch version
         id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           current="$(sed -n 's/^[[:space:]]*version = "\(.*\)".*/\1/p' build.gradle.kts | head -n 1)"
@@ -49,6 +54,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add build.gradle.kts
           git commit -m "chore: release v${next} [skip ci]"
+          gh auth setup-git
           git push
 
           {
@@ -58,13 +64,18 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   build:
+    permissions:
+      contents: read
     name: Build every supported version
     needs: prepare
-    uses: ./.github/workflows/build.yml
+    uses: $/.github/workflows/build.yml
     with:
       ref: ${{ needs.prepare.outputs.sha }}
 
   release:
+    timeout-minutes: 360
+    permissions:
+      contents: write
     name: Publish release
     needs: [prepare, build]
     runs-on: ubuntu-latest
